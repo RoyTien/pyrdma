@@ -11,13 +11,19 @@ FILE_SIZE = 10 * BUFFER_SIZE * BUFFER_SIZE  # 10MB
 OPTIONS = {
     "qp_init": {
         "qp_type": e.IBV_QPT_RC,  # https://stackoverflow.com/questions/35620376/to-create-multiple-queue-pairs-in-rdma
-        "max_send_wr": 4,
-        "max_recv_wr": 4,
-        "max_send_sge": 2,
-        "max_recv_sge": 2,
+        # "max_send_wr": 4,
+        # "max_recv_wr": 4,
+        # "max_send_sge": 2,
+        # "max_recv_sge": 2,
+        "max_send_wr": 2800,
+        "max_recv_wr": 2800,
+        "max_send_sge": 32,
+        "max_recv_sge": 32,
     },
     "cq_init": {
-        "cqe": 8
+        # "cqe": 8
+        "cqe": 2048
+
     },
     "gid_init": {
         "port_num": 1,

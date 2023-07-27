@@ -24,6 +24,30 @@ def check_wc_status(wc: pyverbs.cq.WC):
     if wc.status != e.IBV_WC_SUCCESS:
         print(wc)
         die("on_completion: status is not IBV_WC_SUCCESS")
+        """
+        Recently, there will be two kinds of Error: 
+        1. IBV_WC_RETRY_EXC_ERR
+        2. IBV_WC_RNR_RETRY_EXC_ERR
+        https://www.ibm.com/docs/en/sdk-java-technology/8?topic=jverbs-workcompletionstatus
+        https://linux-rdma.vger.kernel.narkive.com/lD05eFPQ/work-completion-error-transport-retry-counter-exceeded
+
+        IBV_WC_RETRY_EXC_ERR
+        - This event is generated when a sender is unable to receive feedback from the receiver. 
+        - This means that either the receiver just never ACKs sender messages in a specified time period, 
+        or it has been disconnected or it is in a bad state which prevents it from responding.
+        - Transport Retry Counter Exceeded: The local transport timeout retry counter was exceeded while trying to send this message. 
+            This means that the remote side didn't send any Ack or Nack. 
+            If this happens when sending the first message, usually this mean that the connection attributes are wrong or 
+            the remote side isn't in a state that it can respond to messages. If this happens after sending the first message, 
+            usually it means that the remote QP isn't available anymore. 
+        - Relevant for RC QPs.
+        
+        IBV_WC_RNR_RETRY_EXC_ERR
+        - This event is generated when the RNR NAK retry count is exceeded. 
+        - This may be caused by lack of receive buffers on the responder side.
+        - This usually means that the remote side didn't post any WR to its Receive Queue. 
+        - Relevant for RC QPs.
+        """
     if wc.opcode & e.IBV_WC_RECV:
         print("received message")
     elif wc.opcode == e.IBV_WC_SEND:

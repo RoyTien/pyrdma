@@ -17,6 +17,7 @@ from pyverbs.device import Context
 from pyverbs.mr import MR
 from pyverbs.pd import PD
 
+import random
 
 class SocketNode:
     def __init__(self, name, options=c.OPTIONS):
@@ -142,6 +143,49 @@ class SocketNode:
 
     # initiative push file
     def c_push_file(self, file_path):
+        try:
+            self.post_recv(self.recv_mr)
+            self.poll_cq()
+            msg = self.recv_mr.read(c.BUFFER_SIZE, 0)
+            if utils.check_msg(msg, m.FILE_BEGIN_MSG):
+                try:
+                    self.file_attr.open(file_path)
+                except OSError as err:
+                    err_str = str(err)
+                    self.post_send(self.msg_mr, err_str)
+                    return
+                # file body
+                self.file_attr.file_name = file_path
+                # write file name
+                self.post_write(self.file_mr, file_path, len(file_path),
+                                self.remote_metadata.remote_stag, self.remote_metadata.addr,
+                                opcode=e.IBV_WR_RDMA_WRITE, imm_data=len(file_path))
+                self.post_recv(self.recv_mr)
+                read_file_once_flag = False  # 无限发送数据，每次发送 FILE_SIZE 大小的数据
+                while not self.file_attr.is_done():
+                    wc = self.poll_cq()[0]
+                    if wc.opcode & e.IBV_WC_RECV:
+                        msg = self.recv_mr.read(c.BUFFER_SIZE, 0)
+                        self.post_recv(self.recv_mr)
+                        if utils.check_msg(msg, m.FILE_READY_MSG):
+                            # send next chunk
+                            if not read_file_once_flag:  # 第一次发送数据，通过 CPU I/O 读文件内容到内存
+                                file_stream = self.file_attr.fd.read(c.FILE_SIZE)
+                                read_file_once_flag = True  # 更改 flag 为 True，之后 not read_file_once_flag 都为 False，避免 I/O 操作，并且可以无限发送数据
+                            size = len(file_stream)
+                            self.post_write(self.file_mr, file_stream, size,
+                                            self.remote_metadata.remote_stag, self.remote_metadata.addr,
+                                            opcode=e.IBV_WR_RDMA_WRITE, imm_data=size)
+                                            # opcode=e.IBV_WR_RDMA_WRITE_WITH_IMM, imm_data=size)
+                            # print("send next chunk", size)
+                        elif utils.check_msg(msg, m.FILE_DONE_MSG):
+                            print("file done")
+                            # done
+                            self.file_attr.done()
+        finally:
+            self.file_attr.close()
+
+    def c_push_file_original(self, file_path):
         self.post_recv(self.recv_mr)
         self.poll_cq()
         msg = self.recv_mr.read(c.BUFFER_SIZE, 0)
@@ -180,6 +224,48 @@ class SocketNode:
 
     # passive save file
     def s_save_file(self):
+        try:
+            self.post_recv(self.file_mr)
+            self.post_send(self.msg_mr, m.FILE_BEGIN_MSG)
+            while not self.file_attr.is_done():
+                wc = self.poll_cq()[0]
+                # IB立即数的写操作IBV_WR_RDMA_WRITE_WITH_IMM ，对应的远端(remote)接收操作是 IBV_WC_RECV_RDMA_WITH_IMM。
+                # https://blog.csdn.net/eidolon_foot/article/details/131557382
+                # if wc.opcode == e.IBV_WC_RECV_RDMA_WITH_IMM:
+                if wc.opcode == e.IBV_WR_RDMA_WRITE:
+                    # initiative save file
+                    # size = wc.imm_data
+                    size = c.FILE_SIZE
+                    if size == 0:
+                        print("file done")
+                        self.post_send(self.msg_mr, m.FILE_DONE_MSG)
+                        self.file_attr.done()
+                    elif self.file_attr.file_name:
+                        # print("recv file body", size)
+                        self.post_recv(self.file_mr)
+                        file_stream = self.file_mr.read(size, 0)
+                        # self.file_attr.fd.write(file_stream)  # write file stream into disk
+                        self.post_send(self.msg_mr, m.FILE_READY_MSG)
+                    else:
+                        self.post_recv(self.file_mr)
+                        # file_name = self.file_mr.read(size, 0)
+                        # file_name = "./test/push/des/test.file"  # test
+                        file_name = "/tmp/test_{}.file".format(random.randint(0, 9999))  # test
+                        print("The received file will be save into {}".format(file_name))
+                        self.file_attr.file_name = file_name
+                        self.file_attr.fd = utils.create_file(file_name)
+                        self.post_send(self.msg_mr, m.FILE_READY_MSG)
+                elif wc.opcode & e.IBV_WC_RECV:
+                    msg = self.file_mr.read(c.BUFFER_SIZE, 0)
+                    if utils.check_msg(msg, m.FILE_ERR_MSG):
+                        break
+            if self.file_attr.fd:
+                self.post_send(self.msg_mr, m.FILE_DONE_MSG)
+                self.poll_cq()
+        finally:
+            self.file_attr.close()
+
+    def s_save_file_original(self):
         self.post_recv(self.file_mr)
         self.post_send(self.msg_mr, m.FILE_BEGIN_MSG)
         while not self.file_attr.is_done():
@@ -234,7 +320,7 @@ class SocketNode:
                         self.post_send(self.msg_mr, m.FILE_DONE_MSG)
                         self.file_attr.done()
                     else:
-                        print("recv file body", size)
+                        # print("recv file body", size)
                         self.post_recv(self.file_mr)
                         file_stream = self.file_mr.read(size, 0)
                         self.file_attr.fd.write(file_stream)
